@@ -249,17 +249,13 @@
         </select>
       </div>
       <div class="row">
-        <label for="leadSel" class="grow">Compensar retraso (adelantar lo amarillo)</label>
-        <select id="leadSel">
-          <option value="0">No</option>
-          <option value="1">1 palabra</option>
-          <option value="2">2 palabras</option>
-          <option value="3">3 palabras</option>
-          <option value="4">4 palabras</option>
+        <label for="boostMode" class="grow">Subir volumen</label>
+        <select id="boostMode">
+          <option value="otra">Solo en partes de otra persona</option>
+          <option value="siempre">Siempre</option>
         </select>
       </div>
-      <p class="small">El reconocimiento llega un poquito tarde. Esto pone lo amarillo unas palabras adelante mientras hablas, sin pasarse al siguiente párrafo.</p>
-      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
+      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Con "Solo en partes de otra persona" se sube únicamente cuando lo amarillo está en un color marcado como "Otra persona" (se marca en "Ir a"). Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
       <p class="small" id="localInfo">Toca "Revisar" para ver si tu navegador puede funcionar sin internet.</p>
       <div class="row">
         <button id="btnCheckLocal">Revisar</button>
@@ -341,9 +337,8 @@
   let prefLocal = store.get('prefLocal', true);
   let boostOn = store.get('boostOn', false);
   let boostLvl = store.get('boostLvl', 3);
-  let lead = store.get('lead', 2);
-  let lastHeardAt = 0;
-  let leadTimer = null;
+  let boostMode = store.get('boostMode', 'otra');
+
   let fontSize = store.get('fs', 34);
   // Estado de la voz sin internet. Se revisa solo cuando tocas "Revisar":
   // algunos navegadores se traban al preguntarlo y no quiero que pase al abrir la app.
@@ -849,21 +844,8 @@
     for (let i = lo; i < hi && i < tokens.length; i++) tokens[i].el.classList.toggle('done', i < cursor);
     painted = cursor;
     if (curEl) curEl.classList.remove('cur');
-    let ci = nextReal(cursor);
-    // Adelanto: mientras sigues hablando, lo amarillo va unas palabras adelante
-    // de lo último reconocido, sin brincar al siguiente párrafo
-    const parDicho = cursor > 0 ? tokens[Math.min(cursor, tokens.length) - 1].p : -1;
-    if (listening && lead > 0 && ci < tokens.length && tokens[ci].p === parDicho &&
-        Date.now() - lastHeardAt < 1500) {
-      const par = tokens[ci].p;
-      let k = ci, n = 0;
-      while (n < lead) {
-        const nx = nextReal(k + 1);
-        if (nx >= tokens.length || tokens[nx].p !== par) break;
-        k = nx; n++;
-      }
-      ci = k;
-    }
+    const ci = nextReal(cursor);
+    updateGain();
     curEl = ci < tokens.length ? tokens[ci].el : null;
     if (curEl) curEl.classList.add('cur');
 
@@ -1068,16 +1050,10 @@
       const heard = usar.join(' ');
       for (const t of usar) for (const w of t.split(/\s+/)) { const n = norm(w); if (n) words.push(n); }
       $('heard').textContent = heard.trim().slice(-160);
-      if (words.length !== lastWordCount) {
-        lastHeardAt = Date.now();
-        clearTimeout(leadTimer);
-        leadTimer = setTimeout(() => { if (current) paintCursor(); }, 1600);
-      }
       lastWordCount = words.length;
       const spoken = sessionSkip ? words.slice(sessionSkip) : words;
       const p = align(tokens, spoken, sessionStart);
       if (p > cursor) { cursor = p; paintCursor(); checkEnd(); }
-      else if (lead > 0) paintCursor();
     };
     r.onerror = e => {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
@@ -1140,7 +1116,7 @@
   let boost = null;          // { stream, ctx, gain, track }
   let boostFailed = false;
   async function getBoostTrack() {
-    if (boost && boost.track.readyState === 'live') { boost.gain.gain.value = +boostLvl; return boost.track; }
+    if (boost && boost.track.readyState === 'live') { updateGain(); return boost.track; }
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
     });
@@ -1148,14 +1124,24 @@
     await ctx.resume();
     const src = ctx.createMediaStreamSource(stream);
     const gain = ctx.createGain();
-    gain.gain.value = +boostLvl;
+    gain.gain.value = 1;
     // Limitador para que lo fuerte no se distorsione
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -12; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.25;
     const dest = ctx.createMediaStreamDestination();
     src.connect(gain); gain.connect(comp); comp.connect(dest);
     boost = { stream, ctx, gain, track: dest.stream.getAudioTracks()[0] };
+    updateGain();
     return boost.track;
+  }
+  // Volumen según dónde vas: "otra" = solo cuando toca la parte de otra persona
+  function updateGain() {
+    if (!boost) return;
+    const ci = nextReal(cursor);
+    const enOtra = ci < tokens.length && tokens[ci].o;
+    const want = (boostMode === 'siempre' || enOtra) ? +boostLvl : 1;
+    try { boost.gain.gain.setTargetAtTime(want, boost.ctx.currentTime, 0.05); }
+    catch (e) { boost.gain.gain.value = want; }
   }
   function releaseBoost() {
     if (!boost) return;
@@ -1274,12 +1260,12 @@
 
   $('lang').value = lang;
   $('lang').addEventListener('change', () => { lang = $('lang').value; store.set('lang', lang); rec = null; localStatus = store.get('localStatus.' + lang, 'unknown'); showLocalSaved(); });
-  $('leadSel').value = String(lead);
-  $('leadSel').addEventListener('change', () => { lead = +$('leadSel').value; store.set('lead', lead); });
   $('boostOn').checked = boostOn;
   $('boostLvl').value = String(boostLvl);
   $('boostOn').addEventListener('change', () => { boostOn = $('boostOn').checked; boostFailed = false; store.set('boostOn', boostOn); });
-  $('boostLvl').addEventListener('change', () => { boostLvl = +$('boostLvl').value; store.set('boostLvl', boostLvl); if (boost) boost.gain.gain.value = boostLvl; });
+  $('boostLvl').addEventListener('change', () => { boostLvl = +$('boostLvl').value; store.set('boostLvl', boostLvl); updateGain(); });
+  $('boostMode').value = boostMode;
+  $('boostMode').addEventListener('change', () => { boostMode = $('boostMode').value; store.set('boostMode', boostMode); updateGain(); });
   $('prefLocal').checked = prefLocal;
   $('prefLocal').addEventListener('change', () => { prefLocal = $('prefLocal').checked; store.set('prefLocal', prefLocal); rec = null; });
 
