@@ -163,6 +163,9 @@
   .chip { padding: 6px 10px; font-size: 14px; border-radius: 999px; display: inline-flex; gap: 6px; align-items: center; }
   .chip i { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
   .chip.on { border-color: var(--accent); background: #2a2410; }
+  .chip.off { border-color: #6b7482; background: #1d2027; color: var(--muted); text-decoration: line-through; }
+  .w.skip { opacity: .55; cursor: default; }
+  .w.skip.done { opacity: .3; }
   .w.link { text-decoration: underline; text-underline-offset: .15em; color: #5aa9ff; }
   #ed a { color: #5aa9ff; }
 
@@ -302,7 +305,7 @@
         <select id="navDay" class="grow"></select>
       </div>
       <div id="otherRow" hidden>
-        <p class="small" style="margin:8px 0 6px">Colores que lee otra persona (la app los brinca sola si no los oye):</p>
+        <p class="small" style="margin:8px 0 6px">Toca un color para cambiarlo: <b>Yo</b> (lo lees tú), <b>Otra persona</b> (si no se oye, se brinca sola) o <b>No se lee</b> (texto informativo: se brinca siempre).</p>
         <div class="palette" id="otherChips"></div>
       </div>
       <div id="navList"></div>
@@ -780,6 +783,7 @@
     paraStarts = [];
     hasDays = current.paras.some(p0 => dayTag(paraText(p0)));
     const otherSet = new Set(current.other || []);
+    const skipSet = new Set(current.skip || []);
     textColors = new Set();
     const day = dayFilter === 'hoy' ? new Date().getDay() : dayFilter;
     for (const para0 of current.paras) {
@@ -816,7 +820,10 @@
         if (links[at]) { sp.classList.add('link'); sp.dataset.u = links[at]; }
         sp.dataset.i = tokens.length;
         const esOtro = otherSet.has(c);
-        tokens.push({ n: norm(word), el: sp, o: esOtro, p: paraStarts.length - 1 });
+        // Colores marcados como "No se lee": se muestran pero no se siguen
+        const ignorar = skipSet.has(c);
+        if (ignorar) sp.classList.add('skip');
+        tokens.push({ n: ignorar ? '' : norm(word), el: sp, o: esOtro, p: paraStarts.length - 1 });
         p.appendChild(sp);
       }
       if (p.childNodes.length) pr.appendChild(p);
@@ -900,13 +907,19 @@
     $('otherRow').hidden = lista.length < 2;
     for (const c of lista) {
       const b = document.createElement('button');
-      const on = (current.other || []).includes(c);
-      b.className = 'chip' + (on ? ' on' : '');
-      b.innerHTML = `<i style="background:${c || '#f3f4f6'}"></i>${on ? 'Otra persona' : 'Yo'}`;
+      const otra = (current.other || []).includes(c);
+      const salta = (current.skip || []).includes(c);
+      b.className = 'chip' + (otra ? ' on' : salta ? ' off' : '');
+      b.innerHTML = `<i style="background:${c || '#f3f4f6'}"></i>${otra ? 'Otra persona' : salta ? 'No se lee' : 'Yo'}`;
       b.addEventListener('click', () => {
-        const set = new Set(current.other || []);
-        if (set.has(c)) set.delete(c); else set.add(c);
-        current.other = [...set];
+        // Cada toque cambia: Yo -> Otra persona -> No se lee -> Yo
+        const other = new Set(current.other || []);
+        const skip = new Set(current.skip || []);
+        if (other.has(c)) { other.delete(c); skip.add(c); }
+        else if (skip.has(c)) { skip.delete(c); }
+        else other.add(c);
+        current.other = [...other];
+        current.skip = [...skip];
         saveLib();
         const keep = cursor;
         buildText();
