@@ -1,5 +1,5 @@
 // Service worker: guarda la app para que abra rápido y sin internet
-const CACHE = 'apuntador-v10';
+const CACHE = 'apuntador-v11';
 const FILES = ['./', './index.html', './match.js', './manifest.webmanifest', './icon-192.png', './icon-512.png', './textos.json'];
 
 self.addEventListener('install', e => {

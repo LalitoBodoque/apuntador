@@ -1070,8 +1070,8 @@
     }
     cerrar();
     checkedUpTo = hasta;
-    // Una palabra suelta sin oír casi siempre es error del reconocimiento: se marcan tramos de 2+
-    const marcados = runs.filter(r => r.length >= 2);
+    // Se marca toda palabra sin oír, aunque sea una sola
+    const marcados = runs;
     for (const r of marcados) for (const k of r) tokens[k].el.classList.add('miss');
     if (checkMode === 'marcar') return;
     const grandes = marcados.filter(r => r.length >= 3);
@@ -1410,7 +1410,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '10';
+  const VERSION = '11';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);
