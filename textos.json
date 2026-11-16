@@ -1,0 +1,12 @@
+[
+  {
+    "id": "ejemplo-colores",
+    "title": "Ejemplo con colores (bórrame)",
+    "paras": [
+      [{ "t": "Buenas tardes a todos. Hoy quiero platicarles de cómo la automatización nos ahorra horas cada semana.", "c": "" }],
+      [{ "t": "Primero, el bot de Telegram recibe los pendientes.", "c": "#5aa9ff" }],
+      [{ "t": "Después, se crean las tarjetas en Trello y los eventos en el calendario.", "c": "#3ecf8e" }],
+      [{ "t": "Y al final del día, ", "c": "" }, { "t": "Clockify", "c": "#ffd24a" }, { "t": " nos dice cuánto tiempo se fue en cada cosa.", "c": "" }]
+    ]
+  }
+]
