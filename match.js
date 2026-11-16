@@ -42,11 +42,12 @@
   }
 
   // Revisa si la palabra siguiente que se oyó aparece justo después de j
+  // (las partes de otra persona, marcadas con o, no cuentan para la distancia)
   function confirmAhead(tokens, j, next) {
     let seen = 0;
     for (let k = j + 1; k < tokens.length && seen < 3; k++) {
       if (!tokens[k].n) continue;
-      seen++;
+      if (!tokens[k].o) seen++;
       if (similar(tokens[k].n, next)) return true;
     }
     return false;
@@ -83,7 +84,9 @@
       for (let j = pos; j < tokens.length && seen < look; j++) {
         const tn = tokens[j].n;
         if (!tn) continue;
-        seen++;
+        // Las palabras de otra persona se pueden reconocer si se oyen,
+        // pero no cuentan para la distancia: así se brincan solas
+        if (!tokens[j].o) seen++;
         if (!similar(tn, w)) continue;
         if (seen > 3) {
           // Salto largo: solo se acepta si la siguiente palabra también cuadra
@@ -95,8 +98,8 @@
         break;
       }
     }
-    // Si las últimas 4 palabras no cuadraron, intentar resincronizar más adelante
-    if (spoken.length - 1 - lastHit >= 4) {
+    // Si las últimas 3 palabras no cuadraron, intentar resincronizar más adelante
+    if (spoken.length - 1 - lastHit >= 3) {
       const r = findSeq(tokens, spoken.slice(-3), pos, 400);
       if (r >= 0) pos = r;
     }

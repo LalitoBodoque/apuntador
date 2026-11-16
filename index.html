@@ -160,6 +160,9 @@
   .navi .np { color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
   .navi.done .nt { opacity: .45; }
   .navi.here { border-color: var(--accent); }
+  .chip { padding: 6px 10px; font-size: 14px; border-radius: 999px; display: inline-flex; gap: 6px; align-items: center; }
+  .chip i { width: 14px; height: 14px; border-radius: 50%; display: inline-block; }
+  .chip.on { border-color: var(--accent); background: #2a2410; }
   .w.link { text-decoration: underline; text-underline-offset: .15em; color: #5aa9ff; }
   #ed a { color: #5aa9ff; }
 
@@ -236,6 +239,27 @@
         </select>
       </div>
       <label class="chk"><input type="checkbox" id="prefLocal"> Usar voz sin internet cuando se pueda</label>
+      <div class="row">
+        <label class="chk grow"><input type="checkbox" id="boostOn"> Refuerzo de micrófono (para voces bajas)</label>
+        <select id="boostLvl">
+          <option value="2">x2</option>
+          <option value="3">x3</option>
+          <option value="4">x4</option>
+          <option value="6">x6</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="leadSel" class="grow">Compensar retraso (adelantar lo amarillo)</label>
+        <select id="leadSel">
+          <option value="0">No</option>
+          <option value="1">1 palabra</option>
+          <option value="2">2 palabras</option>
+          <option value="3">3 palabras</option>
+          <option value="4">4 palabras</option>
+        </select>
+      </div>
+      <p class="small">El reconocimiento llega un poquito tarde. Esto pone lo amarillo unas palabras adelante mientras hablas, sin pasarse al siguiente párrafo.</p>
+      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
       <p class="small" id="localInfo">Toca "Revisar" para ver si tu navegador puede funcionar sin internet.</p>
       <div class="row">
         <button id="btnCheckLocal">Revisar</button>
@@ -281,6 +305,10 @@
         <label for="navDay" class="small">Misterios de</label>
         <select id="navDay" class="grow"></select>
       </div>
+      <div id="otherRow" hidden>
+        <p class="small" style="margin:8px 0 6px">Colores que lee otra persona (la app los brinca sola si no los oye):</p>
+        <div class="palette" id="otherChips"></div>
+      </div>
       <div id="navList"></div>
     </div>
   </div>
@@ -311,6 +339,11 @@
   let hiddenIds = store.get('hidden', []); // textos del repo que borraste aquí
   let lang = store.get('lang', 'es-MX');
   let prefLocal = store.get('prefLocal', true);
+  let boostOn = store.get('boostOn', false);
+  let boostLvl = store.get('boostLvl', 3);
+  let lead = store.get('lead', 2);
+  let lastHeardAt = 0;
+  let leadTimer = null;
   let fontSize = store.get('fs', 34);
   // Estado de la voz sin internet. Se revisa solo cuando tocas "Revisar":
   // algunos navegadores se traban al preguntarlo y no quiero que pase al abrir la app.
@@ -714,6 +747,7 @@
   let lastTop = -1;
   let paraStarts = [];   // { i: primer token, h, txt }
   let hasDays = false;
+  let textColors = new Set();
   let dayFilter = 'hoy'; // 'hoy' | 0-6 | 'todos'
   const DIAS = { domingo: 0, lunes: 1, martes: 2, miercoles: 3, jueves: 4, viernes: 5, sabado: 6 };
   const DIAS_TXT = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
@@ -750,6 +784,8 @@
     tokens = [];
     paraStarts = [];
     hasDays = current.paras.some(p0 => dayTag(paraText(p0)));
+    const otherSet = new Set(current.other || []);
+    textColors = new Set();
     const day = dayFilter === 'hoy' ? new Date().getDay() : dayFilter;
     for (const para0 of current.paras) {
       const para = P(para0);
@@ -780,10 +816,12 @@
         sp.className = 'w';
         sp.textContent = word;
         const c = cols[at] || '';
+        textColors.add(c);
         if (c) sp.style.color = c;
         if (links[at]) { sp.classList.add('link'); sp.dataset.u = links[at]; }
         sp.dataset.i = tokens.length;
-        tokens.push({ n: norm(word), el: sp });
+        const esOtro = otherSet.has(c);
+        tokens.push({ n: norm(word), el: sp, o: esOtro, p: paraStarts.length - 1 });
         p.appendChild(sp);
       }
       if (p.childNodes.length) pr.appendChild(p);
@@ -811,7 +849,21 @@
     for (let i = lo; i < hi && i < tokens.length; i++) tokens[i].el.classList.toggle('done', i < cursor);
     painted = cursor;
     if (curEl) curEl.classList.remove('cur');
-    const ci = nextReal(cursor);
+    let ci = nextReal(cursor);
+    // Adelanto: mientras sigues hablando, lo amarillo va unas palabras adelante
+    // de lo último reconocido, sin brincar al siguiente párrafo
+    const parDicho = cursor > 0 ? tokens[Math.min(cursor, tokens.length) - 1].p : -1;
+    if (listening && lead > 0 && ci < tokens.length && tokens[ci].p === parDicho &&
+        Date.now() - lastHeardAt < 1500) {
+      const par = tokens[ci].p;
+      let k = ci, n = 0;
+      while (n < lead) {
+        const nx = nextReal(k + 1);
+        if (nx >= tokens.length || tokens[nx].p !== par) break;
+        k = nx; n++;
+      }
+      ci = k;
+    }
     curEl = ci < tokens.length ? tokens[ci].el : null;
     if (curEl) curEl.classList.add('cur');
 
@@ -859,6 +911,28 @@
       const el = add(corto, s.i, (k < here ? 'done ' : '') + (k === here ? 'here' : ''));
       if (k === here) hereEl = el;
     });
+    // Chips de colores para marcar las partes de otra persona
+    const chips = $('otherChips');
+    chips.innerHTML = '';
+    const lista = [...textColors];
+    $('otherRow').hidden = lista.length < 2;
+    for (const c of lista) {
+      const b = document.createElement('button');
+      const on = (current.other || []).includes(c);
+      b.className = 'chip' + (on ? ' on' : '');
+      b.innerHTML = `<i style="background:${c || '#f3f4f6'}"></i>${on ? 'Otra persona' : 'Yo'}`;
+      b.addEventListener('click', () => {
+        const set = new Set(current.other || []);
+        if (set.has(c)) set.delete(c); else set.add(c);
+        current.other = [...set];
+        saveLib();
+        const keep = cursor;
+        buildText();
+        jumpTo(Math.min(keep, tokens.length));
+        openNav();
+      });
+      chips.appendChild(b);
+    }
     $('navDayRow').hidden = !hasDays;
     if (hasDays) {
       const hoy = new Date().getDay();
@@ -994,10 +1068,16 @@
       const heard = usar.join(' ');
       for (const t of usar) for (const w of t.split(/\s+/)) { const n = norm(w); if (n) words.push(n); }
       $('heard').textContent = heard.trim().slice(-160);
+      if (words.length !== lastWordCount) {
+        lastHeardAt = Date.now();
+        clearTimeout(leadTimer);
+        leadTimer = setTimeout(() => { if (current) paintCursor(); }, 1600);
+      }
       lastWordCount = words.length;
       const spoken = sessionSkip ? words.slice(sessionSkip) : words;
       const p = align(tokens, spoken, sessionStart);
       if (p > cursor) { cursor = p; paintCursor(); checkEnd(); }
+      else if (lead > 0) paintCursor();
     };
     r.onerror = e => {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
@@ -1032,7 +1112,7 @@
     };
     r.onend = () => {
       if (listening) {
-        setTimeout(() => { if (listening && rec === r) { try { r.start(); } catch (err) {} } }, restartDelay);
+        setTimeout(() => { if (listening && rec === r) startRec(r); }, restartDelay);
       } else setStatus('En pausa');
     };
     return r;
@@ -1047,12 +1127,57 @@
     const key = lang + '|' + usingLocal;
     if (!rec || recKey !== key) { rec = makeRec(usingLocal); recKey = key; }
     listening = true;
-    try { rec.start(); } catch (err) {}
+    startRec(rec);
     $('btnMic').textContent = 'Pausar';
     $('btnMic').classList.add('on');
     $('dot').classList.add('on');
     $('dot').classList.toggle('local', usingLocal);
     requestWake();
+  }
+
+  // ---------- Refuerzo de micrófono ----------
+  // Se toma el micrófono, se le sube el volumen y ese audio se le pasa al reconocedor.
+  let boost = null;          // { stream, ctx, gain, track }
+  let boostFailed = false;
+  async function getBoostTrack() {
+    if (boost && boost.track.readyState === 'live') { boost.gain.gain.value = +boostLvl; return boost.track; }
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+    });
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    await ctx.resume();
+    const src = ctx.createMediaStreamSource(stream);
+    const gain = ctx.createGain();
+    gain.gain.value = +boostLvl;
+    // Limitador para que lo fuerte no se distorsione
+    const comp = ctx.createDynamicsCompressor();
+    comp.threshold.value = -12; comp.ratio.value = 12; comp.attack.value = 0.003; comp.release.value = 0.25;
+    const dest = ctx.createMediaStreamDestination();
+    src.connect(gain); gain.connect(comp); comp.connect(dest);
+    boost = { stream, ctx, gain, track: dest.stream.getAudioTracks()[0] };
+    return boost.track;
+  }
+  function releaseBoost() {
+    if (!boost) return;
+    try { boost.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    try { boost.ctx.close(); } catch (e) {}
+    boost = null;
+  }
+  async function startRec(r) {
+    if (boostOn && !boostFailed) {
+      try {
+        const track = await getBoostTrack();
+        if (!listening || rec !== r) return;
+        r.start(track);
+        return;
+      } catch (e) {
+        // El navegador no deja pasarle audio propio al reconocedor: micrófono normal
+        boostFailed = true;
+        releaseBoost();
+        showMsg('Tu navegador no permite el refuerzo de micrófono. Sigo con el micrófono normal.');
+      }
+    }
+    try { r.start(); } catch (e) {}
   }
 
   function stopListening() {
@@ -1063,6 +1188,7 @@
     $('dot').classList.remove('on', 'local');
     setStatus('En pausa');
     releaseWake();
+    releaseBoost();
   }
 
   // ---------- Voz sin internet (solo navegadores que lo soportan) ----------
@@ -1117,7 +1243,7 @@
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && listening) {
       requestWake();
-      try { rec.start(); } catch (e) {}
+      startRec(rec);
     }
   });
 
@@ -1148,6 +1274,12 @@
 
   $('lang').value = lang;
   $('lang').addEventListener('change', () => { lang = $('lang').value; store.set('lang', lang); rec = null; localStatus = store.get('localStatus.' + lang, 'unknown'); showLocalSaved(); });
+  $('leadSel').value = String(lead);
+  $('leadSel').addEventListener('change', () => { lead = +$('leadSel').value; store.set('lead', lead); });
+  $('boostOn').checked = boostOn;
+  $('boostLvl').value = String(boostLvl);
+  $('boostOn').addEventListener('change', () => { boostOn = $('boostOn').checked; boostFailed = false; store.set('boostOn', boostOn); });
+  $('boostLvl').addEventListener('change', () => { boostLvl = +$('boostLvl').value; store.set('boostLvl', boostLvl); if (boost) boost.gain.gain.value = boostLvl; });
   $('prefLocal').checked = prefLocal;
   $('prefLocal').addEventListener('change', () => { prefLocal = $('prefLocal').checked; store.set('prefLocal', prefLocal); rec = null; });
 
