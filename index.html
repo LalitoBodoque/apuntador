@@ -270,6 +270,7 @@
         <input type="file" id="fileImport" accept=".json,application/json" hidden>
       </div>
       <p class="small">El respaldo es un archivo <b>textos.json</b>. Si lo subes a tu repo junto a la app, esos textos aparecen solos en cualquier aparato.</p>
+      <p class="small" id="version"></p>
     </div>
   </section>
 
@@ -540,6 +541,11 @@
   function view(v) {
     document.body.classList.remove('v-lib', 'v-edit', 'v-prompt');
     document.body.classList.add('v-' + v);
+    // La dirección refleja el texto abierto (#id), para poder guardarla como enlace
+    try {
+      const want = v === 'prompt' && current ? '#' + current.id : '';
+      if (location.hash !== want) history.replaceState(null, '', location.pathname + want);
+    } catch (e) {}
     if (v !== 'prompt') { $('title').textContent = 'Apuntador'; setStatus(''); }
   }
 
@@ -562,9 +568,11 @@
           <div class="t">${esc(titleOf(tx))}</div>
           <div class="p">${total} palabras${tx.cursor ? ' · vas en ' + pctOf(tx) + '%' : ''} · ${prev}</div>
         </div>
+        <button data-link>Enlace</button>
         <button data-edit>Editar</button>`;
       div.querySelector('.info').addEventListener('click', () => openText(tx));
       div.querySelector('[data-edit]').addEventListener('click', () => openEditor(tx));
+      div.querySelector('[data-link]').addEventListener('click', () => copyLink(tx));
       list.appendChild(div);
     }
   }
@@ -766,6 +774,7 @@
   let userScrollUntil = 0;
 
   function openText(tx) {
+    if (listening) stopListening();
     current = tx;
     rec = null;
     $('heard').textContent = '';
@@ -1302,15 +1311,49 @@
   });
   window.addEventListener('appinstalled', () => { $('btnInstall').hidden = true; });
   if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+    window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {}); });
   }
+
+  // ---------- Enlaces directos ----------
+  // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
+  const VERSION = '9';
+  function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
+  async function copyLink(tx) {
+    const url = urlOf(tx);
+    try { await navigator.clipboard.writeText(url); showMsg('Enlace copiado: ' + url); }
+    catch (e) { showMsg('Enlace: ' + url); }
+  }
+  function findByHash() {
+    const id = decodeURIComponent(location.hash.replace(/^#/, ''));
+    if (!id) return null;
+    return lib.find(t => t.id === id) || lib.find(t => norm(t.title) === norm(id)) || null;
+  }
+  let routePending = false;
+  function route() {
+    if (!location.hash) return;
+    const tx = findByHash();
+    if (tx) { routePending = false; if (current !== tx || !document.body.classList.contains('v-prompt')) openText(tx); }
+    else routePending = true;
+  }
+  window.addEventListener('hashchange', () => {
+    route();
+    if (routePending) { routePending = false; showMsg('No encontré ese texto en este aparato. Impórtalo primero.'); }
+  });
 
   // ---------- Arranque ----------
   document.documentElement.style.setProperty('--fs', fontSize + 'px');
   try { document.execCommand('defaultParagraphSeparator', false, 'div'); } catch (e) {}
+  $('version').textContent = 'Versión ' + VERSION;
   renderLib();
+  const pedido = location.hash;
   view('lib');
-  loadBundled();
+  if (pedido) { try { history.replaceState(null, '', location.pathname + pedido); } catch (e) {} route(); }
+  loadBundled().then(() => {
+    if (routePending) {
+      route();
+      if (routePending) { routePending = false; showMsg('No encontré ese texto en este aparato. Impórtalo primero.'); }
+    }
+  });
   showLocalSaved();
   if (!SR) showMsg('Este navegador no tiene reconocimiento de voz. Usa Chrome o Edge.');
 })();
