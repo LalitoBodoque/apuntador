@@ -74,7 +74,8 @@
   }
 
   // Recorre lo que se oyó desde "start" y regresa la nueva posición del cursor
-  function align(tokens, spoken, start) {
+  // hits (opcional): se llena con pares [índice del texto, índice de lo oído]
+  function align(tokens, spoken, start, hits) {
     let pos = start;
     let lastHit = -1;
     for (let i = 0; i < spoken.length; i++) {
@@ -92,6 +93,15 @@
           // Salto largo: solo se acepta si la siguiente palabra también cuadra
           const nx = spoken[i + 1];
           if (!nx || !confirmAhead(tokens, j, nx)) continue;
+        }
+        if (hits) {
+          hits.push([j, i]);
+          // Tras un brinco, las palabras justo antes también pudieron decirse: se cuentan
+          for (let k = 1; i - k > lastHit && j - k >= pos; k++) {
+            const tk = tokens[j - k];
+            if (!tk.n) continue;
+            if (similar(tk.n, spoken[i - k])) hits.push([j - k, i - k]); else break;
+          }
         }
         pos = j + 1;
         lastHit = i;

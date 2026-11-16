@@ -165,6 +165,9 @@
   .chip.on { border-color: var(--accent); background: #2a2410; }
   .chip.off { border-color: #6b7482; background: #1d2027; color: var(--muted); text-decoration: line-through; }
   .w.skip { opacity: .55; cursor: default; }
+  .w.miss { text-decoration: underline wavy #ff5c5c; text-decoration-thickness: 2px; text-underline-offset: .2em; }
+  .w.diff { text-decoration: underline dotted #ff9f43; text-decoration-thickness: 3px; text-underline-offset: .2em; }
+  .w.done.miss, .w.done.diff { opacity: .8; }
   .w.skip.done { opacity: .3; }
   .w.link { text-decoration: underline; text-underline-offset: .15em; color: #5aa9ff; }
   #ed a { color: #5aa9ff; }
@@ -242,6 +245,16 @@
         </select>
       </div>
       <label class="chk"><input type="checkbox" id="prefLocal"> Usar voz sin internet cuando se pueda</label>
+      <div class="row">
+        <label for="checkMode" class="grow">Revisar lo que leo</label>
+        <select id="checkMode">
+          <option value="todo">Avisar brincos y palabras distintas</option>
+          <option value="brincos">Avisar solo brincos</option>
+          <option value="marcar">Solo marcar, sin avisar</option>
+          <option value="no">Apagado</option>
+        </select>
+      </div>
+      <p class="small">Compara lo que oye la app con lo escrito. Lo que te brincas se subraya en rojo ondulado y lo que dijiste distinto, en naranja punteado. Ojo: a veces el que se equivoca es el reconocimiento de voz, no tú.</p>
       <div class="row">
         <label class="chk grow"><input type="checkbox" id="boostOn"> Refuerzo de micrófono (para voces bajas)</label>
         <select id="boostLvl">
@@ -342,6 +355,7 @@
   let boostOn = store.get('boostOn', false);
   let boostLvl = store.get('boostLvl', 3);
   let boostMode = store.get('boostMode', 'otra');
+  let checkMode = store.get('checkMode', 'todo');
 
   let fontSize = store.get('fs', 34);
   // Estado de la voz sin internet. Se revisa solo cuando tocas "Revisar":
@@ -814,6 +828,7 @@
       // "1-Dios" se separa en "1-" y "Dios" para que "Dios" sí se reconozca
       const re = /(\s*)(\d+[-\u2013)](?=\S)|\S+)/g;
       let m;
+      let paren = 0;
       while ((m = re.exec(txt))) {
         const lead = m[1];
         const word = m[2];
@@ -832,12 +847,19 @@
         // Colores marcados como "No se lee": se muestran pero no se siguen
         const ignorar = skipSet.has(c);
         if (ignorar) sp.classList.add('skip');
-        tokens.push({ n: ignorar ? '' : norm(word), el: sp, o: esOtro, p: paraStarts.length - 1 });
+        // Lo que va entre paréntesis (citas, días) y los números no se revisan
+        const abre = (word.match(/\(/g) || []).length, cierra = (word.match(/\)/g) || []).length;
+        const enParen = paren > 0 || abre > 0;
+        paren = Math.max(0, paren + abre - cierra);
+        const nn = ignorar ? '' : norm(word);
+        tokens.push({ n: nn, el: sp, o: esOtro, p: paraStarts.length - 1, noCheck: enParen || /^\d+$/.test(nn) });
         p.appendChild(sp);
       }
       if (p.childNodes.length) pr.appendChild(p);
     }
     totalReal = tokens.filter(t => t.n).length;
+    heardMap = new Map();
+    checkedUpTo = 0;
     // Si hay párrafos marcados como sección, el índice usa esos; si no, todos los párrafos
     sections = paraStarts.some(x => x.h) ? paraStarts.filter(x => x.h) : paraStarts;
     phrasesCache = null;
@@ -846,6 +868,7 @@
     if ((current.cursorKey || '') !== key) current.cursor = 0;
     current.cursorKey = key;
     cursor = Math.min(current.cursor || 0, tokens.length);
+    checkedUpTo = cursor; // lo de antes de donde te quedaste no se revisa
     painted = 0;
     curEl = null;
     lastTop = -1;
@@ -996,7 +1019,12 @@
   }
 
   function jumpTo(i) {
-    cursor = Math.max(0, Math.min(i, tokens.length));
+    const nuevo = Math.max(0, Math.min(i, tokens.length));
+    if (nuevo < checkedUpTo) {
+      for (let k = nuevo; k < tokens.length; k++) { tokens[k].el.classList.remove('miss', 'diff'); heardMap.delete(k); }
+    }
+    checkedUpTo = nuevo; // lo que te brincas tocando o con "Ir a" no se marca
+    cursor = nuevo;
     sessionStart = cursor;
     sessionSkip = lastWordCount;
     lastTop = -1;
@@ -1008,6 +1036,58 @@
     if (tokens.length && nextReal(cursor) >= tokens.length) {
       stopListening();
       setStatus('Terminaste');
+      if (checkMode !== 'no') {
+        const brincos = tokens.filter(t => t.el.classList.contains('miss')).length;
+        const distintas = tokens.filter(t => t.el.classList.contains('diff')).length;
+        showMsg(brincos || distintas
+          ? `Terminaste. Palabras brincadas: ${brincos}. Palabras distintas: ${distintas}. Están subrayadas para que las revises.`
+          : 'Terminaste sin brincos ni palabras distintas.');
+      }
+    }
+  }
+
+  // ---------- Revisar lo que lees ----------
+  let heardMap = new Map();  // índice del texto -> palabra oída
+  let checkedUpTo = 0;       // hasta dónde ya se revisó
+  let checkTimer = null;
+  function reviewReading(final) {
+    if (checkMode === 'no' || !tokens.length) return;
+    // Se revisa hasta lo último reconocido (al terminar o pausar, todo)
+    const hasta = Math.min(cursor, tokens.length);
+    if (hasta <= checkedUpTo) return;
+    const runs = [];          // tramos de palabras brincadas
+    const distintas = [];
+    let run = [];
+    const cerrar = () => { if (run.length) runs.push(run); run = []; };
+    for (let k = checkedUpTo; k < hasta; k++) {
+      const t = tokens[k];
+      if (!t.n || t.o || t.noCheck) continue;
+      const h = heardMap.get(k);
+      if (!h) { run.push(k); continue; }
+      cerrar();
+      // Dicho distinto: cuadró de cerca pero no igual (palabras de 3+ letras)
+      if (h.n !== t.n && t.n.length >= 3) { t.el.classList.add('diff'); t.el.title = 'Se oyó: ' + h.raw; distintas.push([k, h.raw]); }
+    }
+    cerrar();
+    checkedUpTo = hasta;
+    // Una palabra suelta sin oír casi siempre es error del reconocimiento: se marcan tramos de 2+
+    const marcados = runs.filter(r => r.length >= 2);
+    for (const r of marcados) for (const k of r) tokens[k].el.classList.add('miss');
+    if (checkMode === 'marcar') return;
+    const grandes = marcados.filter(r => r.length >= 3);
+    const avisos = [];
+    if (grandes.length) {
+      const r = grandes[grandes.length - 1];
+      const txt = r.slice(0, 6).map(k => tokens[k].el.textContent).join(' ') + (r.length > 6 ? '...' : '');
+      avisos.push(`Te brincaste ${r.length} palabras: "${txt}"`);
+    }
+    if (checkMode === 'todo' && distintas.length) {
+      const [k, raw] = distintas[distintas.length - 1];
+      avisos.push(`Dijiste "${raw}" en vez de "${tokens[k].el.textContent.replace(/[.,;:!?¡¿"“”]/g, '')}"`);
+    }
+    if (avisos.length) {
+      showMsg(avisos.join('. '));
+      try { navigator.vibrate && navigator.vibrate(120); } catch (e) {}
     }
   }
 
@@ -1070,12 +1150,19 @@
         (t.length > texts[k - 1].length && t.toLowerCase().startsWith(texts[k - 1].toLowerCase())));
       const usar = acumulado ? [texts[texts.length - 1]] : texts;
       const heard = usar.join(' ');
-      for (const t of usar) for (const w of t.split(/\s+/)) { const n = norm(w); if (n) words.push(n); }
+      const raws = [];
+      for (const t of usar) for (const w of t.split(/\s+/)) { const n = norm(w); if (n) { words.push(n); raws.push(w); } }
       $('heard').textContent = heard.trim().slice(-160);
       lastWordCount = words.length;
       const spoken = sessionSkip ? words.slice(sessionSkip) : words;
-      const p = align(tokens, spoken, sessionStart);
+      const rawS = sessionSkip ? raws.slice(sessionSkip) : raws;
+      const hits = [];
+      const p = align(tokens, spoken, sessionStart, hits);
+      for (const [j, i] of hits) heardMap.set(j, { n: spoken[i], raw: rawS[i] });
       if (p > cursor) { cursor = p; paintCursor(); checkEnd(); }
+      // Revisar un ratito después de que dejas de hablar, para no marcar antes de tiempo
+      clearTimeout(checkTimer);
+      checkTimer = setTimeout(() => reviewReading(false), 1200);
     };
     r.onerror = e => {
       if (e.error === 'no-speech' || e.error === 'aborted') return;
@@ -1197,6 +1284,8 @@
     setStatus('En pausa');
     releaseWake();
     releaseBoost();
+    clearTimeout(checkTimer);
+    reviewReading(true);
   }
 
   // ---------- Voz sin internet (solo navegadores que lo soportan) ----------
@@ -1282,6 +1371,11 @@
 
   $('lang').value = lang;
   $('lang').addEventListener('change', () => { lang = $('lang').value; store.set('lang', lang); rec = null; localStatus = store.get('localStatus.' + lang, 'unknown'); showLocalSaved(); });
+  $('checkMode').value = checkMode;
+  $('checkMode').addEventListener('change', () => {
+    checkMode = $('checkMode').value; store.set('checkMode', checkMode);
+    if (checkMode === 'no') tokens.forEach(t => t.el.classList.remove('miss', 'diff'));
+  });
   $('boostOn').checked = boostOn;
   $('boostLvl').value = String(boostLvl);
   $('boostOn').addEventListener('change', () => { boostOn = $('boostOn').checked; boostFailed = false; store.set('boostOn', boostOn); });
@@ -1316,7 +1410,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '9';
+  const VERSION = '10';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);
