@@ -1133,6 +1133,9 @@
     }
 
     r.onstart = () => {
+      recActive = true;
+      startTries = 0;
+      lastActivity = Date.now();
       sessionStart = cursor;
       sessionSkip = 0;
       lastWordCount = 0;
@@ -1140,6 +1143,7 @@
       setStatus(usingLocal ? 'Escuchando (sin internet)' : 'Escuchando...');
     };
     r.onresult = e => {
+      lastActivity = Date.now();
       const words = [];
       const texts = [];
       for (let k = 0; k < e.results.length; k++) texts.push(e.results[k][0].transcript.trim());
@@ -1196,6 +1200,7 @@
       }
     };
     r.onend = () => {
+      if (rec === r) recActive = false;
       if (listening) {
         setTimeout(() => { if (listening && rec === r) startRec(r); }, restartDelay);
       } else setStatus('En pausa');
@@ -1212,7 +1217,10 @@
     const key = lang + '|' + usingLocal;
     if (!rec || recKey !== key) { rec = makeRec(usingLocal); recKey = key; }
     listening = true;
+    startTries = 0;
+    lastActivity = Date.now();
     startRec(rec);
+    startWatchdog();
     $('btnMic').textContent = 'Pausar';
     $('btnMic').classList.add('on');
     $('dot').classList.add('on');
@@ -1258,7 +1266,41 @@
     try { boost.ctx.close(); } catch (e) {}
     boost = null;
   }
+  // ---------- Vigilante: que la escucha nunca se quede apagada ----------
+  // Chrome corta la escucha en cada silencio y la app la vuelve a prender (ese es el
+  // sonidito). Si el reinicio falla, el vigilante lo reintenta; si falla varias veces,
+  // crea un reconocedor nuevo.
+  let recActive = false;
+  let startTries = 0;
+  let lastStartTry = 0;
+  let lastActivity = 0;
+  let watchdog = null;
+  function startWatchdog() {
+    clearInterval(watchdog);
+    watchdog = setInterval(() => {
+      if (!listening) return;
+      const ahora = Date.now();
+      if (!recActive && ahora - lastStartTry > 2000) {
+        startTries++;
+        if (startTries >= 2) {
+          // El reconocedor se trabó: uno nuevo
+          try { rec.abort(); } catch (e) {}
+          rec = makeRec(usingLocal);
+          startTries = 0;
+        }
+        setStatus('Reconectando...');
+        startRec(rec);
+      } else if (recActive && ahora - lastActivity > 30000) {
+        // Activo pero sin oír nada en 30 s: se reinicia por si quedó sordo
+        lastActivity = ahora;
+        try { rec.abort(); } catch (e) {}
+      }
+    }, 1000);
+  }
+  function stopWatchdog() { clearInterval(watchdog); watchdog = null; }
+
   async function startRec(r) {
+    lastStartTry = Date.now();
     if (boostOn && !boostFailed) {
       try {
         const track = await getBoostTrack();
@@ -1277,6 +1319,7 @@
 
   function stopListening() {
     listening = false;
+    stopWatchdog();
     try { if (rec) rec.stop(); } catch (err) {}
     $('btnMic').textContent = 'Escuchar';
     $('btnMic').classList.remove('on');
@@ -1410,7 +1453,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '12';
+  const VERSION = '13';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);
