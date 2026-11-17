@@ -280,9 +280,9 @@
       <div class="row">
         <button id="btnExport">Exportar respaldo</button>
         <button id="btnImport">Importar respaldo</button>
-        <input type="file" id="fileImport" accept=".json,application/json" hidden>
+        <input type="file" id="fileImport" accept=".json,.txt,application/json,text/plain" hidden>
       </div>
-      <p class="small">El respaldo es un archivo <b>textos.json</b>. Si lo subes a tu repo junto a la app, esos textos aparecen solos en cualquier aparato.</p>
+      <p class="small">Exportar abre el menú de compartir del cel: elige <b>Drive</b> para guardarlo ahí. El respaldo incluye tus textos con sus colores y lo que marcaste en "Ir a" (Otra persona / No se lee). El respaldo es un archivo <b>textos.json</b>. Si lo subes a tu repo junto a la app, esos textos aparecen solos en cualquier aparato.</p>
       <p class="small" id="version"></p>
     </div>
   </section>
@@ -720,16 +720,32 @@
   });
 
   // ---------- Respaldo ----------
-  $('btnExport').addEventListener('click', () => {
-    const data = lib.map(t => ({ id: t.id, title: t.title, paras: t.paras }));
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  $('btnExport').addEventListener('click', async () => {
+    // Se guardan los textos y también las marcas de colores de cada uno
+    const data = lib.map(t => ({ id: t.id, title: t.title, paras: t.paras, other: t.other || [], skip: t.skip || [] }));
+    const json = JSON.stringify(data, null, 2);
+    const fecha = new Date().toISOString().slice(0, 10);
+    // 1) Menú de compartir del cel (ahí sale Drive). Chrome no deja compartir
+    //    archivos .json, así que va como .txt; al importar se lee igual.
+    try {
+      const file = new File([json], `respaldo-apuntador-${fecha}.txt`, { type: 'text/plain' });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'Respaldo de Apuntador' });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === 'AbortError') return; // cerraste el menú: no pasa nada
+    }
+    // 2) Si el navegador no tiene menú de compartir: se descarga
+    const blob = new Blob([json], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'textos.json';
+    a.download = `respaldo-apuntador-${fecha}.json`;
     document.body.appendChild(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    showMsg('Respaldo descargado en tu carpeta de Descargas.');
   });
   $('btnImport').addEventListener('click', () => $('fileImport').click());
   $('fileImport').addEventListener('change', async e => {
@@ -745,6 +761,10 @@
         const ya = lib.find(x => x.id === t.id);
         if (ya) { ya.paras = paras; ya.title = t.title || ''; }
         else lib.push({ id: t.id, title: t.title || '', paras, cursor: 0, updated: Date.now() });
+        // Si el respaldo trae las marcas de colores, se aplican
+        const dest = ya || lib[lib.length - 1];
+        if (Array.isArray(t.other)) dest.other = t.other;
+        if (Array.isArray(t.skip)) dest.skip = t.skip;
         hiddenIds = hiddenIds.filter(h => h !== t.id);
         n++;
       }
@@ -1453,7 +1473,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '13';
+  const VERSION = '14';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);

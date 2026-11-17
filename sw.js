@@ -1,5 +1,5 @@
 // Service worker: guarda la app para que abra rápido y sin internet
-const CACHE = 'apuntador-v13';
+const CACHE = 'apuntador-v14';
 const FILES = ['./', './index.html', './match.js', './manifest.webmanifest', './icon-192.png', './icon-512.png', './textos.json'];
 const ESPERA_MAX = 1500; // ms que se espera a internet antes de usar la copia guardada
 
