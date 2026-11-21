@@ -137,6 +137,13 @@
   .w { border-radius: 6px; padding: 0 .08em; transition: opacity .25s, background .25s, color .25s; cursor: pointer; }
   .w.done { opacity: .32; }
   .w.cur { background: var(--hl, var(--accent)); color: #111 !important; opacity: 1; }
+  /* Renglón completo en amarillo; la sombra rellena el espacio entre palabras */
+  .w.ln { background: var(--hl, var(--accent)); color: #111 !important; opacity: 1; border-radius: 0; box-shadow: .3em 0 0 var(--hl, var(--accent)); }
+  .w.ln.done { opacity: .5; }
+  /* La palabra exacta que sigue: rayita oscura abajo */
+  .w.ln.cur { opacity: 1; box-shadow: .3em 0 0 var(--hl, var(--accent)), inset 0 -.13em 0 rgba(0,0,0,.6); }
+  /* Sin oír: el renglón se pone gris para que sepas que la app no te está siguiendo */
+  body.deaf .w.ln, body.deaf .w.cur { background: #8a8f98; box-shadow: .3em 0 0 #8a8f98; }
   #prompter p.h { font-weight: 800; border-top: 1px solid var(--line); padding-top: .5em; margin-top: 1em; letter-spacing: .2px; }
   #ed h3 { font-size: 20px; margin: .6em 0 .4em; padding-top: .3em; border-top: 1px solid var(--line); }
 
@@ -271,7 +278,7 @@
           <option value="siempre">Siempre</option>
         </select>
       </div>
-      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Con "Solo en partes de otra persona" se sube únicamente cuando lo amarillo está en un color marcado como "Otra persona" (se marca en "Ir a"). Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
+      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Con "Solo en partes de otra persona" se sube únicamente mientras lo amarillo espera tu siguiente parte justo después de una parte marcada como "Otra persona" (se marca en "Ir a"). Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
       <p class="small" id="localInfo">Toca "Revisar" para ver si tu navegador puede funcionar sin internet.</p>
       <div class="row">
         <button id="btnCheckLocal">Revisar</button>
@@ -319,7 +326,7 @@
         <select id="navDay" class="grow"></select>
       </div>
       <div id="otherRow" hidden>
-        <p class="small" style="margin:8px 0 6px">Toca un color para cambiarlo: <b>Yo</b> (lo lees tú), <b>Otra persona</b> (si no se oye, se brinca sola) o <b>No se lee</b> (texto informativo: se brinca siempre).</p>
+        <p class="small" style="margin:8px 0 6px">Toca un color para cambiarlo: <b>Yo</b> (lo lees tú), <b>Otra persona</b> (lo amarillo se la brinca y espera tu siguiente parte) o <b>No se lee</b> (texto informativo: se brinca siempre).</p>
         <div class="palette" id="otherChips"></div>
       </div>
       <div id="navList"></div>
@@ -895,10 +902,14 @@
     paintCursor(true);
   }
 
-  function nextReal(i) { while (i < tokens.length && !tokens[i].n) i++; return i; }
-  function prevReal(i) { i--; while (i > 0 && !tokens[i].n) i--; return Math.max(0, i); }
+  // Palabra que te toca decir a ti (no vacía y no de otra persona)
+  function isMine(t) { return !!t.n && !t.o; }
+  function nextReal(i) { while (i < tokens.length && !isMine(tokens[i])) i++; return i; }
+  function prevReal(i) { i--; while (i > 0 && !isMine(tokens[i])) i--; return Math.max(0, i); }
 
   function paintCursor(force) {
+    // Lo de otra persona (y lo que no se lee) se da por pasado: lo amarillo brinca a tu parte
+    cursor = nextReal(cursor);
     const lo = Math.min(painted, cursor), hi = Math.max(painted, cursor);
     for (let i = lo; i < hi && i < tokens.length; i++) tokens[i].el.classList.toggle('done', i < cursor);
     painted = cursor;
@@ -907,6 +918,7 @@
     updateGain();
     curEl = ci < tokens.length ? tokens[ci].el : null;
     if (curEl) curEl.classList.add('cur');
+    paintLine();
 
     let said = 0;
     for (let i = 0; i < cursor && i < tokens.length; i++) if (tokens[i].n) said++;
@@ -917,6 +929,27 @@
     showSection();
     scrollToCurrent(force);
   }
+  // Pinta todo el renglón (como se ve en pantalla) donde está la palabra que sigue
+  let lineEls = [];
+  function paintLine() {
+    for (const el of lineEls) el.classList.remove('ln');
+    lineEls = [];
+    if (!curEl) return;
+    const ci = +curEl.dataset.i;
+    const top = curEl.offsetTop;
+    const tol = curEl.offsetHeight / 2;
+    const mismo = k => Math.abs(tokens[k].el.offsetTop - top) < tol;
+    const pinta = k => {
+      const t = tokens[k];
+      if (t.o || t.el.classList.contains('skip')) return; // lo de otra persona no se pinta
+      t.el.classList.add('ln');
+      lineEls.push(t.el);
+    };
+    for (let k = ci; k >= 0 && mismo(k); k--) pinta(k);
+    for (let k = ci + 1; k < tokens.length && mismo(k); k++) pinta(k);
+  }
+  window.addEventListener('resize', () => { if (tokens.length) paintLine(); });
+
   function sectionIndexAt(pos) {
     let k = -1;
     for (let s = 0; s < sections.length; s++) if (sections[s].i <= pos) k = s; else break;
@@ -1162,6 +1195,7 @@
     };
     r.onresult = e => {
       lastActivity = Date.now();
+      setDeaf(false);
       const words = [];
       const texts = [];
       for (let k = 0; k < e.results.length; k++) texts.push(e.results[k][0].transcript.trim());
@@ -1227,7 +1261,7 @@
       }
     };
     r.onend = () => {
-      if (rec === r) recActive = false;
+      if (rec === r) { recActive = false; lastEnd = Date.now(); }
       if (listening) {
         setTimeout(() => { if (listening && rec === r) startRec(r); }, restartDelay);
       } else setStatus('En pausa');
@@ -1282,7 +1316,9 @@
   function updateGain() {
     if (!boost) return;
     const ci = nextReal(cursor);
-    const enOtra = ci < tokens.length && tokens[ci].o;
+    let k = ci - 1;
+    while (k >= 0 && !tokens[k].n) k--;
+    const enOtra = k >= 0 && tokens[k].o;
     const want = (boostMode === 'siempre' || enOtra) ? +boostLvl : 1;
     try { boost.gain.gain.setTargetAtTime(want, boost.ctx.currentTime, 0.05); }
     catch (e) { boost.gain.gain.value = want; }
@@ -1301,6 +1337,7 @@
   let startTries = 0;
   let lastStartTry = 0;
   let lastActivity = 0;
+  let lastEnd = 0;
   let watchdog = null;
   function startWatchdog() {
     clearInterval(watchdog);
@@ -1317,14 +1354,26 @@
         }
         setStatus('Reconectando...');
         startRec(rec);
-      } else if (recActive && ahora - lastActivity > 30000) {
-        // Activo pero sin oír nada en 30 s: se reinicia por si quedó sordo
+      } else if (recActive && ahora - lastActivity > 12000) {
+        // Activo pero sin oír nada en 12 s (antes 30): Google se trabó, se reinicia.
+        // Mientras más rápido se reinicia, menos texto queda atrás y menos tiene que brincar.
         lastActivity = ahora;
         try { rec.abort(); } catch (e) {}
       }
+      // Gris si lleva rato sin oír o reconectando: así sabes que debes esperar
+      const sordo = (!recActive && ahora - Math.max(lastStartTry, lastEnd) > 1500) || (recActive && ahora - lastActivity > 8000);
+      setDeaf(sordo);
     }, 1000);
   }
-  function stopWatchdog() { clearInterval(watchdog); watchdog = null; }
+  function stopWatchdog() { clearInterval(watchdog); watchdog = null; setDeaf(false); }
+  let deaf = false;
+  function setDeaf(v) {
+    if (v === deaf) return;
+    deaf = v;
+    document.body.classList.toggle('deaf', v);
+    if (v) setStatus('No te oigo, espera...');
+    else if (listening) setStatus(usingLocal ? 'Escuchando (sin internet)' : 'Escuchando...');
+  }
 
   async function startRec(r) {
     lastStartTry = Date.now();
@@ -1423,6 +1472,7 @@
   function applyFont() {
     document.documentElement.style.setProperty('--fs', fontSize + 'px');
     store.set('fs', fontSize);
+    paintLine();
     lastTop = -1;
     scrollToCurrent(true);
   }
@@ -1480,7 +1530,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '15';
+  const VERSION = '16';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);

@@ -3,6 +3,9 @@
 (function (root) {
   'use strict';
 
+  // Lo más que puede brincar al resincronizar, en palabras tuyas (unos 2 o 3 renglones en el cel)
+  const MAX_SALTO = 15;
+
   // Normaliza una palabra: minúsculas, sin acentos, sin signos
   function norm(s) {
     return String(s)
@@ -53,22 +56,20 @@
     return false;
   }
 
-  // Busca 3 palabras seguidas en el texto (para cuando te saltas un pedazo)
+  // Busca 4 palabras seguidas en el texto (para cuando te saltas un pedazo).
+  // Solo busca cerca y solo en tus partes: con oraciones que se repiten (rosario),
+  // buscar lejos encontraba la misma frase más adelante y daba brincos grandes.
   function findSeq(tokens, tail, from, maxReal) {
     const largas = tail.filter(w => w.length >= 4).length;
-    if (tail.length < 3 || largas < 2) return -1;
+    if (tail.length < 4 || largas < 2) return -1;
     const idx = [];
-    for (let k = from; k < tokens.length && idx.length < maxReal + 3; k++) {
-      if (tokens[k].n) idx.push(k);
+    for (let k = from; k < tokens.length && idx.length < maxReal + 4; k++) {
+      if (tokens[k].n && !tokens[k].o) idx.push(k);
     }
-    for (let s = 0; s + 2 < idx.length; s++) {
-      if (
-        similar(tokens[idx[s]].n, tail[0]) &&
-        similar(tokens[idx[s + 1]].n, tail[1]) &&
-        similar(tokens[idx[s + 2]].n, tail[2])
-      ) {
-        return idx[s + 2] + 1;
-      }
+    for (let s = 0; s + 3 < idx.length; s++) {
+      let ok = true;
+      for (let q = 0; q < 4 && ok; q++) ok = similar(tokens[idx[s + q]].n, tail[q]);
+      if (ok) return idx[s + 3] + 1;
     }
     return -1;
   }
@@ -88,6 +89,9 @@
         // Las palabras de otra persona se pueden reconocer si se oyen,
         // pero no cuentan para la distancia: así se brincan solas
         if (!tokens[j].o) seen++;
+        // Lo de otra persona solo cuenta si está justo enfrente. Si antes hay palabras
+        // tuyas sin decir, no se busca: así no brinca a la parte de ella de más adelante
+        if (tokens[j].o && seen > 0) continue;
         if (!similar(tn, w)) continue;
         if (seen > 3) {
           // Salto largo: solo se acepta si la siguiente palabra también cuadra
@@ -108,9 +112,10 @@
         break;
       }
     }
-    // Si las últimas 3 palabras no cuadraron, intentar resincronizar más adelante
-    if (spoken.length - 1 - lastHit >= 3) {
-      const r = findSeq(tokens, spoken.slice(-3), pos, 400);
+    // Si las últimas 4 palabras no cuadraron, intentar resincronizar un poco más adelante
+    // (máximo MAX_SALTO palabras tuyas; antes eran 400)
+    if (spoken.length - 1 - lastHit >= 4) {
+      const r = findSeq(tokens, spoken.slice(-4), pos, MAX_SALTO);
       if (r >= 0) pos = r;
     }
     return pos;
