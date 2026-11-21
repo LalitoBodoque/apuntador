@@ -134,16 +134,14 @@
     user-select: none;
   }
   #prompter p { margin: 0 0 .7em; max-width: 34em; }
-  .w { border-radius: 6px; padding: 0 .08em; transition: opacity .25s, background .25s, color .25s; cursor: pointer; }
+  .w { border-radius: 6px; padding: 0 .08em; transition: opacity .25s; cursor: pointer; }
   .w.done { opacity: .32; }
-  .w.cur { background: var(--hl, var(--accent)); color: #111 !important; opacity: 1; }
-  /* Renglón completo en amarillo; la sombra rellena el espacio entre palabras */
-  /* Todo el renglón del mismo amarillo, como una sola barra con puntas redondeadas */
-  .w.ln { --lnc: var(--hl, var(--accent)); background: var(--lnc); color: #111 !important; opacity: 1; border-radius: 0; box-shadow: .3em 0 0 var(--lnc); }
-  .w.ln.ln-ini { border-top-left-radius: 10px; border-bottom-left-radius: 10px; }
-  .w.ln.ln-fin { border-top-right-radius: 10px; border-bottom-right-radius: 10px; box-shadow: none; }
-  /* Sin oír: el renglón se pone gris para que sepas que la app no te está siguiendo */
-  body.deaf .w.ln, body.deaf .w.cur { --lnc: #8a8f98; background: #8a8f98; }
+  /* El renglón se pinta con UNA sola barra detrás del texto, de un jalón (no palabra por palabra) */
+  #prompter { isolation: isolate; } /* la barra (z-index -1) queda detrás de las letras pero visible */
+  #lineHl { position: absolute; z-index: -1; pointer-events: none; border-radius: 10px; background: var(--hl, var(--accent)); display: none; }
+  .w.cur, .w.ln { color: #111 !important; opacity: 1; transition: none; }
+  /* Sin oír: la barra se pone gris para que sepas que la app no te está siguiendo */
+  body.deaf #lineHl { background: #8a8f98; }
   #prompter p.h { font-weight: 800; border-top: 1px solid var(--line); padding-top: .5em; margin-top: 1em; letter-spacing: .2px; }
   #ed h3 { font-size: 20px; margin: .6em 0 .4em; padding-top: .3em; border-top: 1px solid var(--line); }
 
@@ -924,13 +922,15 @@
   // Pinta todo el renglón (como se ve en pantalla) donde está la palabra que sigue
   let lineEls = [];
   function paintLine() {
-    for (const el of lineEls) el.classList.remove('ln', 'ln-ini', 'ln-fin');
+    for (const el of lineEls) el.classList.remove('ln');
     lineEls = [];
-    if (!curEl) return;
+    const bar = lineBar();
+    if (!curEl) { bar.style.display = 'none'; return; }
     const ci = +curEl.dataset.i;
     const top = curEl.offsetTop;
     const tol = curEl.offsetHeight / 2;
-    const mismo = k => Math.abs(tokens[k].el.offsetTop - top) < tol;
+    const par = tokens[ci].p;
+    const mismo = k => tokens[k].p === par && Math.abs(tokens[k].el.offsetTop - top) < tol;
     const pinta = k => {
       const t = tokens[k];
       if (t.o || t.el.classList.contains('skip')) return; // lo de otra persona no se pinta
@@ -939,10 +939,23 @@
     };
     for (let k = ci; k >= 0 && mismo(k); k--) pinta(k);
     for (let k = ci + 1; k < tokens.length && mismo(k); k++) pinta(k);
-    if (!lineEls.length) return;
+    if (!lineEls.length) { bar.style.display = 'none'; return; }
     lineEls.sort((a, b) => a.dataset.i - b.dataset.i);
-    lineEls[0].classList.add('ln-ini');
-    lineEls[lineEls.length - 1].classList.add('ln-fin');
+    const a = lineEls[0], z = lineEls[lineEls.length - 1];
+    const pad = 6;
+    bar.style.left = (a.offsetLeft - pad) + 'px';
+    bar.style.top = (a.offsetTop - 2) + 'px';
+    bar.style.width = (z.offsetLeft + z.offsetWidth - a.offsetLeft + pad * 2) + 'px';
+    bar.style.height = (a.offsetHeight + 4) + 'px';
+    bar.style.display = 'block';
+  }
+  // La barra vive dentro del área del texto (se vuelve a poner si se borra el contenido)
+  function lineBar() {
+    let bar = $('lineHl');
+    if (!bar) { bar = document.createElement('div'); bar.id = 'lineHl'; }
+    const pr = $('prompter');
+    if (bar.parentNode !== pr) pr.insertBefore(bar, pr.firstChild);
+    return bar;
   }
   window.addEventListener('resize', () => { if (tokens.length) paintLine(); });
 
@@ -1520,7 +1533,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '17';
+  const VERSION = '18';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);
