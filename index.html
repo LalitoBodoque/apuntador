@@ -138,12 +138,12 @@
   .w.done { opacity: .32; }
   .w.cur { background: var(--hl, var(--accent)); color: #111 !important; opacity: 1; }
   /* Renglón completo en amarillo; la sombra rellena el espacio entre palabras */
-  .w.ln { background: var(--hl, var(--accent)); color: #111 !important; opacity: 1; border-radius: 0; box-shadow: .3em 0 0 var(--hl, var(--accent)); }
-  .w.ln.done { opacity: .5; }
-  /* La palabra exacta que sigue: rayita oscura abajo */
-  .w.ln.cur { opacity: 1; box-shadow: .3em 0 0 var(--hl, var(--accent)), inset 0 -.13em 0 rgba(0,0,0,.6); }
+  /* Todo el renglón del mismo amarillo, como una sola barra con puntas redondeadas */
+  .w.ln { --lnc: var(--hl, var(--accent)); background: var(--lnc); color: #111 !important; opacity: 1; border-radius: 0; box-shadow: .3em 0 0 var(--lnc); }
+  .w.ln.ln-ini { border-top-left-radius: 10px; border-bottom-left-radius: 10px; }
+  .w.ln.ln-fin { border-top-right-radius: 10px; border-bottom-right-radius: 10px; box-shadow: none; }
   /* Sin oír: el renglón se pone gris para que sepas que la app no te está siguiendo */
-  body.deaf .w.ln, body.deaf .w.cur { background: #8a8f98; box-shadow: .3em 0 0 #8a8f98; }
+  body.deaf .w.ln, body.deaf .w.cur { --lnc: #8a8f98; background: #8a8f98; }
   #prompter p.h { font-weight: 800; border-top: 1px solid var(--line); padding-top: .5em; margin-top: 1em; letter-spacing: .2px; }
   #ed h3 { font-size: 20px; margin: .6em 0 .4em; padding-top: .3em; border-top: 1px solid var(--line); }
 
@@ -271,14 +271,7 @@
           <option value="6">x6</option>
         </select>
       </div>
-      <div class="row">
-        <label for="boostMode" class="grow">Subir volumen</label>
-        <select id="boostMode">
-          <option value="otra">Solo en partes de otra persona</option>
-          <option value="siempre">Siempre</option>
-        </select>
-      </div>
-      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Con "Solo en partes de otra persona" se sube únicamente mientras lo amarillo espera tu siguiente parte justo después de una parte marcada como "Otra persona" (se marca en "Ir a"). Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
+      <p class="small">Sube el volumen de lo que oye el micrófono antes de reconocerlo. Si tu navegador no lo permite, la app usa el micrófono normal y te avisa.</p>
       <p class="small" id="localInfo">Toca "Revisar" para ver si tu navegador puede funcionar sin internet.</p>
       <div class="row">
         <button id="btnCheckLocal">Revisar</button>
@@ -361,7 +354,6 @@
   let prefLocal = store.get('prefLocal', true);
   let boostOn = store.get('boostOn', false);
   let boostLvl = store.get('boostLvl', 3);
-  let boostMode = store.get('boostMode', 'otra');
   let checkMode = store.get('checkMode', 'todo');
 
   let fontSize = store.get('fs', 34);
@@ -932,7 +924,7 @@
   // Pinta todo el renglón (como se ve en pantalla) donde está la palabra que sigue
   let lineEls = [];
   function paintLine() {
-    for (const el of lineEls) el.classList.remove('ln');
+    for (const el of lineEls) el.classList.remove('ln', 'ln-ini', 'ln-fin');
     lineEls = [];
     if (!curEl) return;
     const ci = +curEl.dataset.i;
@@ -947,6 +939,10 @@
     };
     for (let k = ci; k >= 0 && mismo(k); k--) pinta(k);
     for (let k = ci + 1; k < tokens.length && mismo(k); k++) pinta(k);
+    if (!lineEls.length) return;
+    lineEls.sort((a, b) => a.dataset.i - b.dataset.i);
+    lineEls[0].classList.add('ln-ini');
+    lineEls[lineEls.length - 1].classList.add('ln-fin');
   }
   window.addEventListener('resize', () => { if (tokens.length) paintLine(); });
 
@@ -1312,14 +1308,10 @@
     updateGain();
     return boost.track;
   }
-  // Volumen según dónde vas: "otra" = solo cuando toca la parte de otra persona
+  // Con el refuerzo prendido, el volumen se sube siempre
   function updateGain() {
     if (!boost) return;
-    const ci = nextReal(cursor);
-    let k = ci - 1;
-    while (k >= 0 && !tokens[k].n) k--;
-    const enOtra = k >= 0 && tokens[k].o;
-    const want = (boostMode === 'siempre' || enOtra) ? +boostLvl : 1;
+    const want = +boostLvl;
     try { boost.gain.gain.setTargetAtTime(want, boost.ctx.currentTime, 0.05); }
     catch (e) { boost.gain.gain.value = want; }
   }
@@ -1500,8 +1492,6 @@
   $('boostLvl').value = String(boostLvl);
   $('boostOn').addEventListener('change', () => { boostOn = $('boostOn').checked; boostFailed = false; store.set('boostOn', boostOn); });
   $('boostLvl').addEventListener('change', () => { boostLvl = +$('boostLvl').value; store.set('boostLvl', boostLvl); updateGain(); });
-  $('boostMode').value = boostMode;
-  $('boostMode').addEventListener('change', () => { boostMode = $('boostMode').value; store.set('boostMode', boostMode); updateGain(); });
   $('prefLocal').checked = prefLocal;
   $('prefLocal').addEventListener('change', () => { prefLocal = $('prefLocal').checked; store.set('prefLocal', prefLocal); rec = null; });
 
@@ -1530,7 +1520,7 @@
 
   // ---------- Enlaces directos ----------
   // https://.../apuntador/#santo-rosario abre ese texto sin pasar por la lista
-  const VERSION = '16';
+  const VERSION = '17';
   function urlOf(tx) { return location.origin + location.pathname + '#' + tx.id; }
   async function copyLink(tx) {
     const url = urlOf(tx);
